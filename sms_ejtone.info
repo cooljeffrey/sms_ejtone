@@ -1,0 +1,15 @@
+name = "sms ejtone"
+description = "Allows the SMS Framework to use ejtone as a gateway."
+package = SMS Framework
+dependencies[] = sms
+core = 7.x
+
+files[] = sms_ejtone.module
+files[] = sms_ejtone.rules.inc
+
+; Information added by drupal.org packaging script on 2013-10-01
+version = "7.x-1.x-dev"
+core = "7.x"
+project = "sms_ejtone"
+datestamp = "1380628966"
+

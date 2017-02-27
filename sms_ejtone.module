@@ -1,0 +1,183 @@
+<?php
+
+define('DEFAULT_EJTONE_API_VERSION', '2010-04-01');
+
+/**
+ * @file
+ * Adds support for sending SMS messages using the Twilio gateway.
+ */
+
+/**
+ * Implements hook_gateway_info().
+ */
+function sms_ejtone_gateway_info() {
+  return array(
+    'ejtone' => array(
+      'name' => 'ejtone',
+      'configure form' => 'sms_ejtone_admin_form',
+      'receive' => FALSE,
+      'send' => 'sms_ejtone_send',
+      'send form' => 'sms_ejtone_send_form',
+    ),
+  );
+}
+
+/**
+ * Admin/settings form.
+ */
+function sms_ejtone_admin_form($configuration) {
+  $form['sms_ejtone_api_userid'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Account ID'),
+    '#description' => t('ejtone Account ID'),
+    '#size' => 40,
+    '#maxlength' => 255,
+    '#default_value' => !empty($configuration['sms_ejtone_api_userid']) ? $configuration['sms_ejtone_api_userid'] : '',
+  );
+  $form['sms_ejtone_api_password'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Account password'),
+    '#description' => t('ejtone account password'),
+    '#size' => 40,
+    '#maxlength' => 255,
+    '#default_value' => !empty($configuration['sms_ejtone_api_password']) ? $configuration['sms_ejtone_api_password'] : '',
+  );
+  $form['sms_ejtone_base_url'] = array(
+    '#type' => 'textfield',
+    '#title' => t('ejtone api base url'),
+    '#description' => t('The full base url ending with forward splash'),
+    '#size' => 40,
+    '#maxlength' => 255,
+    '#default_value' => !empty($configuration['sms_ejtone_base_url']) ? $configuration['sms_ejtone_base_url'] : 'http://sandbox.ejtone.com:28080/HIF12',
+  );
+  $form['sms_ejtone_balance_threadhold'] = array(
+      '#type' => 'textfield',
+      '#title' => t('ejtone account balance threadhold'),
+      '#description' => t('ejtone account balance threadhold to alert administrators'),
+      '#size' => 40,
+      '#maxlength' => 10,
+      '#default_value' => !empty($configuration['sms_ejtone_balance_threadhold']) ? $configuration['sms_ejtone_balance_threadhold'] : '100',
+  );
+  return $form;
+}
+
+/**
+ * Validates the submission of the configuration form.
+ */
+function sms_twilio_admin_form_validate($form, &$form_state) {
+}
+
+/**
+ * Returns custom additions to be added to the send forms
+ */
+//function sms_ejtone_send_form() {
+//
+//  return $form;
+//}
+
+/**
+ * Callback for sending messages.
+ */
+function sms_ejtone_send($number, $message, $options) {
+  $number = preg_replace("/[^0-9]/", '', $number);
+  $number = trim($number);
+  $number = ltrim($number, '0'); // Remove leading zeros
+
+  $gateway = sms_gateways('gateway', 'ejtone');
+  $config = $gateway['configuration'];
+  $headers = array('Accept' => 'application/json', 'ContentType' => 'application/json;charset=utf-8;');
+  $data = json_encode(array(
+      'Userid'      => $config['sms_ejtone_api_userid'],
+      'Passwd'      => $config['sms_ejtone_api_password'],
+      'Mobile'      => $number,
+      'Content'     => $message,
+  ), JSON_UNESCAPED_UNICODE);
+  watchdog('sms_ejtone', 'Sending sms @content to @mobile', array('@content'=>$message, '@mobile'=>$number), WATCHDOG_INFO);
+  $url = $config['sms_ejtone_base_url'] . 'mt/';
+  $response = drupal_http_request($url, array('headers' => $headers, 'method'=>'POST', 'data'=> $data,));
+
+  $result = array(
+      'status' => FALSE,
+      'message' => '',
+      'variables' => array(),
+  );
+
+  //{"Rets":[{"Rspcode":0,"Msg_Id":"0113141302000001006220","Mobile":"13810632645"}]}
+  watchdog('sms_ejtone', 'Sent sms @content to @mobile, response @result ', array('@content'=>$message, '@mobile'=>$number, '@result'=>print_r($response, TRUE)), WATCHDOG_INFO);
+
+  $json = json_decode($response->data);
+
+  watchdog('sms_ejtone', 'Sent sms @content to @mobile, response data @result ', array('@content'=>$message, '@mobile'=>$number, '@result'=>print_r($json, TRUE)), WATCHDOG_INFO);
+
+  $result['variables'] = $json;
+
+  if($response->code == 200){
+    if(!empty($json->Rets)){
+      foreach($json->Rets as $delta=>$ret){
+        if(!empty($ret) && isset($ret->Rspcode) && isset($ret->Mobile) && $ret->Rspcode == 0 && $ret->Mobile==$number ){
+          $result['status'] = TRUE;
+          break;
+        }
+      }
+    }else{
+      $result['status'] = FALSE;
+    }
+  }else{
+    $result['status'] = FALSE;
+    $result['message'] = '';
+  }
+  return $result;
+}
+
+function sms_ejtone_check_balance(){
+  $gateway = sms_gateways('gateway', 'ejtone');
+  $config = $gateway['configuration'];
+  $headers = array('Accept' => 'application/json', 'ContentType' => 'application/json;charset=utf-8;');
+  $url = $config['sms_ejtone_base_url'] . 'queryamtf/' . $config['sms_ejtone_api_userid'] . '/' . $config['sms_ejtone_api_password'];
+  $response = drupal_http_request($url, array('headers' => $headers, 'method'=>'POST',));
+
+  //{"Rets":[{"Rspcode":0,"Msg_Id":"0113141302000001006220","Mobile":"13810632645"}]}
+  watchdog('sms_ejtone', 'check balance response to @response ', array('@response'=>print_r($response, TRUE),), WATCHDOG_INFO);
+
+  $json = json_decode($response->data);
+
+  watchdog('sms_ejtone', 'check balance @result ', array('@result'=>print_r($json, TRUE),), WATCHDOG_INFO);
+
+  if($response->code == 200){
+    if($json->Rspcode == 0){
+      $threadhold = $config['sms_ejtone_balance_threadhold'] ? $config['sms_ejtone_balance_threadhold'] : 100;
+      if($json->Count < $threadhold) {
+        if (module_exists('rules')) {
+          try {
+            rules_invoke_all('sms_ejtone_balance_alert', array('balance_count' => $json->Count,));
+          }catch(Exception $e){
+            watchdog('sms_ejtone', 'check balance error : @exception ', array('@exception'=>print_r($e, TRUE),), WATCHDOG_ERROR);
+          }
+        }
+      }
+    }else{
+      if (module_exists('rules')) {
+        try {
+//          rules_invoke_all('sms_ejtone_balance_check_failed', array('response_str' => print_r($response, TRUE),));
+          watchdog('sms_ejtone', 'check balance error : @response ', array('@response'=>print_r($response, TRUE),), WATCHDOG_ERROR);
+        }catch(Exception $e){
+          watchdog('sms_ejtone', 'check balance error : @exception ', array('@exception'=>print_r($e, TRUE),), WATCHDOG_ERROR);
+        }
+      }
+    }
+  }else{
+    if (module_exists('rules')) {
+      try {
+//        rules_invoke_all('sms_ejtone_balance_check_failed', array('response_str' => print_r($response, TRUE),));
+        watchdog('sms_ejtone', 'check balance error : @response ', array('@response'=>print_r($response, TRUE),), WATCHDOG_ERROR);
+      }catch(Exception $e){
+        watchdog('sms_ejtone', 'check balance error : @exception ', array('@exception'=>print_r($e, TRUE),), WATCHDOG_ERROR);
+      }
+    }
+  }
+}
+
+
+function sms_ejtone_cron() {
+  sms_ejtone_check_balance();
+}
